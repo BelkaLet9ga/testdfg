@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from html import escape
+from html.parser import HTMLParser
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -18,6 +19,7 @@ from storage import (
     change_mailbox,
     count_messages,
     ensure_mailbox_record,
+    ensure_user,
     get_message,
     get_user_for_address,
     list_messages,
@@ -49,6 +51,44 @@ def _split_sender(raw: str) -> tuple[str, str]:
         name, email = raw.split("<", 1)
         return name.strip().strip('"'), email.strip(" >")
     return raw, raw
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links: list[tuple[str, str]] = []
+        self._current_href: Optional[str] = None
+        self._buffer: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "a":
+            return
+        attrs_dict = dict(attrs)
+        href = attrs_dict.get("href")
+        if not href:
+            return
+        self._current_href = href
+        self._buffer = []
+
+    def handle_data(self, data):
+        if self._current_href is not None:
+            self._buffer.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() != "a" or self._current_href is None:
+            return
+        text = "".join(self._buffer).strip() or self._current_href
+        self.links.append((text, self._current_href))
+        self._current_href = None
+        self._buffer = []
+
+
+def _extract_links(html: str) -> list[tuple[str, str]]:
+    if not html:
+        return []
+    parser = _LinkParser()
+    parser.feed(html)
+    return parser.links
 
 
 class TelegramBot:
@@ -83,10 +123,20 @@ class TelegramBot:
     async def notify_new_email(
         self, recipient: str, sender: str, subject: str, body: str
     ) -> None:
-        user_id = get_user_for_address(recipient)
-        if not user_id:
+        owner = get_user_for_address(recipient)
+        if not owner or not owner.get("telegram_id"):
             return
         preview = _short(body, 200)
+        buttons = []
+        links = _extract_links(body_html or "")
+        for title, href in links[:3]:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        title[:32] or href, url=href
+                    )
+                ]
+            )
         name, email = _split_sender(sender or "")
         text = (
             "<b>🔔 Новое письмо</b>\n"
@@ -94,11 +144,10 @@ class TelegramBot:
             f"└ <b>{escape(subject or '(без темы)')}</b>\n\n"
             f"{escape(preview or '[Пустое тело]')}"
         )
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")]]
-        )
+        buttons.append([InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")])
+        keyboard = InlineKeyboardMarkup(buttons)
         await self.application.bot.send_message(
-            chat_id=int(user_id),
+            chat_id=int(owner["telegram_id"]),
             text=text,
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -107,12 +156,12 @@ class TelegramBot:
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
             return
-        await self._send_dashboard(update.effective_chat.id, update.effective_user.id)
+        await self._send_dashboard(update.effective_chat.id, update.effective_user)
 
     async def cmd_inbox(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
             return
-        await self._send_dashboard(update.effective_chat.id, update.effective_user.id)
+        await self._send_dashboard(update.effective_chat.id, update.effective_user)
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
@@ -129,7 +178,6 @@ class TelegramBot:
         if not query or not query.from_user or not query.message:
             return
         data = query.data or ""
-        user_id = query.from_user.id
         chat_id = query.message.chat.id
         message_id = query.message.message_id
 
@@ -138,13 +186,14 @@ class TelegramBot:
             return
 
         if data == "refresh":
-            await self._send_dashboard(chat_id, user_id, message_id)
+            await self._send_dashboard(chat_id, query.from_user, message_id)
             await query.answer("Список обновлён")
             return
 
         if data == "change":
-            info = change_mailbox(user_id)
-            await self._send_dashboard(chat_id, user_id, message_id)
+            user_record = ensure_user(query.from_user.id, query.from_user.full_name)
+            info = change_mailbox(user_record["id"])
+            await self._send_dashboard(chat_id, query.from_user, message_id)
             await query.answer(f"Новый ящик: {info['address']}")
             return
 
@@ -161,11 +210,21 @@ class TelegramBot:
             body = (email.get("body") or "").strip()
             if len(body) > MAX_MESSAGE_LENGTH:
                 body = body[: MAX_MESSAGE_LENGTH - len(TRUNCATION_NOTICE)] + TRUNCATION_NOTICE
+            links = _extract_links(email.get("body_html") or "")
+            links_block = ""
+            if links:
+                rendered = []
+                for idx, (title, href) in enumerate(links, start=1):
+                    rendered.append(
+                        f"{idx}. <a href=\"{escape(href)}\">{escape(title)}</a>"
+                    )
+                links_block = "\n\n<b>Ссылки из письма:</b>\n" + "\n".join(rendered)
             text = (
                 f"<b>От:</b> {escape(email.get('sender') or 'Неизвестно')}\n"
                 f"<b>Тема:</b> {escape(email.get('subject') or '(без темы)')}\n"
                 f"<b>Получено:</b> {escape(email.get('received_at') or '')}\n\n"
                 f"<pre>{escape(body or '[Пустое тело]')}</pre>"
+                f"{links_block}"
             )
             await self.application.bot.send_message(
                 chat_id=chat_id,
@@ -176,17 +235,19 @@ class TelegramBot:
             return
 
     async def _send_dashboard(
-        self, chat_id: int, user_id: int, message_id: Optional[int] = None
+        self, chat_id: int, telegram_user, message_id: Optional[int] = None
     ) -> None:
-        info = ensure_mailbox_record(user_id)
-        address = info["address"]
-        created_at = _format_datetime(info["created_at"])
-        total = count_messages(address)
-        letters = list_messages(address, limit=MESSAGE_LIMIT)
+        user_record = ensure_user(telegram_user.id, telegram_user.full_name)
+        mailbox = ensure_mailbox_record(user_record["id"])
+        address = mailbox["address"]
+        created_at = _format_datetime(mailbox["created_at"])
+        total = count_messages(mailbox["id"])
+        letters = list_messages(mailbox["id"], limit=MESSAGE_LIMIT)
 
         text = (
             "<b>Главное меню</b>\n\n"
             f"<b>📧 {escape(address)}</b>\n"
+            f"<b>Пароль:</b> {escape(mailbox['password'])}\n"
             f"<b>Количество писем: {total}</b>\n"
             f"<b>Дата создания: {escape(created_at)}</b>"
         )
