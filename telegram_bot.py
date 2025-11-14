@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from typing import Optional
 
 from telegram import Update
@@ -25,28 +23,19 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("inbox", self.cmd_inbox))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
-        self._polling_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         await self.application.initialize()
         await self.application.start()
-        self._polling_task = asyncio.create_task(
-            self.application.updater.start_polling()
-        )
+        await self.application.updater.start_polling()
 
     async def idle(self) -> None:
-        if self._polling_task:
-            try:
-                await self._polling_task
-            except asyncio.CancelledError:
-                pass
+        if self.application.updater:
+            await self.application.updater.wait_closed()
 
     async def stop(self) -> None:
-        if self._polling_task:
+        if self.application.updater:
             await self.application.updater.stop()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._polling_task
-            self._polling_task = None
         await self.application.stop()
         await self.application.shutdown()
 
