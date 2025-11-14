@@ -354,7 +354,7 @@ class TelegramBot:
             tools_open = not tools_open
         self._tools_state[chat_id] = tools_open
 
-        icon = "▼" if tools_open else "⌵"
+        icon = "⌵" if tools_open else "⌵"
         keyboard.append([InlineKeyboardButton(f"🧰 Инструменты {icon}", callback_data="toggle_tools")])
         if tools_open:
             keyboard.append([InlineKeyboardButton("↻ Обновить", callback_data="refresh")])
