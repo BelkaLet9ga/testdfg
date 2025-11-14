@@ -43,6 +43,14 @@ def _short(text: Optional[str], limit: int = 40) -> str:
     return value if len(value) <= limit else value[: limit - 3] + "..."
 
 
+def _split_sender(raw: str) -> tuple[str, str]:
+    raw = raw.strip() or "Неизвестно"
+    if "<" in raw and ">" in raw:
+        name, email = raw.split("<", 1)
+        return name.strip().strip('"'), email.strip(" >")
+    return raw, raw
+
+
 class TelegramBot:
     def __init__(self, token: str):
         self.application = Application.builder().token(token).build()
@@ -78,16 +86,22 @@ class TelegramBot:
         user_id = get_user_for_address(recipient)
         if not user_id:
             return
-        preview = _short(body, 300)
+        preview = _short(body, 200)
+        name, email = _split_sender(sender or "")
         text = (
-            f"<b>Новое письмо для {escape(recipient)}</b>\n"
-            f"<b>От:</b> {escape(sender or 'Неизвестно')}\n"
-            f"<b>Тема:</b> {escape(subject or '(без темы)')}\n\n"
-            f"{escape(preview or '[Пустое тело]')}\n\n"
-            "Открой /inbox, чтобы увидеть детали."
+            "<b>🔔 Новое письмо</b>\n"
+            f"├ {escape(name)} &lt;{escape(email)}&gt;\n"
+            f"└ <b>{escape(subject or '(без темы)')}</b>\n\n"
+            f"{escape(preview or '[Пустое тело]')}"
+        )
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")]]
         )
         await self.application.bot.send_message(
-            chat_id=int(user_id), text=text, parse_mode="HTML"
+            chat_id=int(user_id),
+            text=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
         )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
