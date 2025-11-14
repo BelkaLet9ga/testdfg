@@ -22,7 +22,9 @@ async def main():
     print("Telegram-бот запущен. Нажмите Ctrl+C для остановки.")
 
     try:
-        await bot.idle()
+        await asyncio.Future()
+    except asyncio.CancelledError:
+        pass
     finally:
         controller.stop()
         await bot.stop()
