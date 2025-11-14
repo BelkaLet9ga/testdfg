@@ -175,7 +175,7 @@ class TelegramBot:
         if not owner or not owner.get("telegram_id"):
             return
         normalized_text = _normalize_body(body_plain or "", body_html or "")
-        preview = _short(normalized_text, 200)
+        preview = ""
         buttons = []
         links = _extract_links(body_html or "")
         codes = _extract_codes(normalized_text)
@@ -193,13 +193,17 @@ class TelegramBot:
             "<b>🔔 Новое письмо</b>\n"
             f"├ {escape(name)} &lt;{escape(email)}&gt;\n"
             f"└ <b>{escape(subject or '(без темы)')}</b>\n\n"
-            f"{escape(preview or '[Пустое тело]')}"
         )
         if codes:
-            text += "\n\n<b>Коды из письма:</b>\n" + "\n".join(
-                f"{idx}. <code>{escape(code)}</code>"
-                for idx, code in enumerate(codes, start=1)
+            text += (
+                "<b>📧 Ваш код:</b> "
+                + " / ".join(f"<code>{escape(code)}</code>" for code in codes[:3])
+                + "\n\n"
             )
+        else:
+            text += f"{escape(_short(normalized_text, 120) or '[Пустое тело]')}\n\n"
+        if links and not codes:
+            text += "Нажмите кнопку, чтобы открыть ссылку.\n"
 
         buttons.append([InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")])
         keyboard = InlineKeyboardMarkup(buttons)
