@@ -71,9 +71,13 @@ def _build_notification_text(state: dict) -> str:
     return text
 
 
-def _build_notification_keyboard(state: dict) -> list[list[InlineKeyboardButton]]:
+def _build_notification_keyboard(
+    state: dict,
+    include_open_button: bool = True,
+    include_code_button: bool = True,
+) -> list[list[InlineKeyboardButton]]:
     buttons: list[list[InlineKeyboardButton]] = []
-    if state.get("code"):
+    if include_code_button and state.get("code"):
         label = "👁 Скрыть код" if state["code_visible"] else "👁 Показать код"
         buttons.append([InlineKeyboardButton(label, callback_data="notif_code")])
     if state.get("links"):
@@ -84,8 +88,22 @@ def _build_notification_keyboard(state: dict) -> list[list[InlineKeyboardButton]
         if state["links_open"]:
             for title, href in state["links"]:
                 buttons.append([InlineKeyboardButton(title[:32] or href, url=href)])
-    buttons.append([InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")])
+    if include_open_button:
+        buttons.append([InlineKeyboardButton("🔍 Показать письмо", callback_data="notif_open")])
     return buttons
+
+
+def _build_full_email_text(state: dict) -> str:
+    text = (
+        f"От: {escape(state['sender_line'])}\n"
+        f"Тема: {escape(state['subject'])}\n"
+        f"Получено: {escape(state.get('received_at') or '')}\n\n"
+    )
+    if state.get("code"):
+        text += f"🔏 Возможный код: <code>{escape(state['code'])}</code>\n\n"
+    body = state.get("body_text") or "[Пустое тело]"
+    text += f"<pre>{escape(body)}</pre>"
+    return text
 
 
 class _LinkParser(HTMLParser):
@@ -227,6 +245,8 @@ class TelegramBot:
             "code_visible": False,
             "links": links,
             "links_open": False,
+            "body_text": normalized_text.strip(),
+            "received_at": datetime.utcnow().isoformat(),
         }
         keyboard = InlineKeyboardMarkup(_build_notification_keyboard(state))
         message = await self.application.bot.send_message(
@@ -260,6 +280,26 @@ class TelegramBot:
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message or not update.effective_chat:
             return
+
+    async def _send_full_email(self, chat_id: int, source_message_id: int) -> None:
+        state = self._notif_state.get((chat_id, source_message_id))
+        if not state:
+            await self.application.bot.send_message(
+                chat_id=chat_id, text="Письмо недоступно."
+            )
+            return
+        keyboard = InlineKeyboardMarkup(
+            _build_notification_keyboard(
+                state, include_open_button=False, include_code_button=False
+            )
+        )
+        message = await self.application.bot.send_message(
+            chat_id=chat_id,
+            text=_build_full_email_text(state),
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+        self._notif_state[(message.chat_id, message.message_id)] = dict(state)
         chat_id = update.effective_chat.id
         state = self._auth_state.get(chat_id)
         if not state:
@@ -381,9 +421,9 @@ class TelegramBot:
             await query.answer()
             return
 
-        if data == "refresh":
-            await self._send_dashboard(chat_id, query.from_user, message_id)
-            await query.answer("Список обновлён")
+        if data == "notif_open":
+            await self._send_full_email(chat_id, message_id)
+            await query.answer()
             return
 
         if data == "change":
