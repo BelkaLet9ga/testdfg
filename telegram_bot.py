@@ -30,7 +30,9 @@ class TelegramBot:
     async def start(self) -> None:
         await self.application.initialize()
         await self.application.start()
-        self._polling_task = asyncio.create_task(self.application.updater.start_polling())
+        self._polling_task = asyncio.create_task(
+            self.application.updater.start_polling()
+        )
 
     async def idle(self) -> None:
         if self._polling_task:
@@ -41,7 +43,7 @@ class TelegramBot:
 
     async def stop(self) -> None:
         if self._polling_task:
-            self._polling_task.cancel()
+            await self.application.updater.stop()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._polling_task
             self._polling_task = None
