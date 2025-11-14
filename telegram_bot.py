@@ -217,19 +217,24 @@ class TelegramBot:
 
     async def _send_long_email(self, chat_id: int, email: dict, body: str) -> None:
         links = _extract_links(body)
-        links_text = "\n".join(links) if links else "Ссылок нет"
-        caption = (
+        links_block = "\n".join(links) if links else "Ссылок нет"
+        info_text = (
             f"<b>Отправитель:</b> {escape(email.get('sender') or 'Неизвестно')}\n"
             f"<b>Почта:</b> {escape(email.get('recipient') or '—')}\n"
-            f"<b>Ссылки:</b>\n{escape(links_text)}"
+            f"<b>Ссылки:</b>\n{escape(links_block)}"
         )
+        await self.application.bot.send_message(
+            chat_id=chat_id,
+            text=info_text,
+            parse_mode="HTML",
+        )
+
         buffer = io.BytesIO(body.encode("utf-8"))
         buffer.name = f"email-{email.get('id', 'unknown')}.txt"
         await self.application.bot.send_document(
             chat_id=chat_id,
             document=buffer,
-            caption=caption,
-            parse_mode="HTML",
+            caption="Полный текст письма во вложении.",
         )
 
 
