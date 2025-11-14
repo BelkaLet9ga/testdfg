@@ -1,6 +1,4 @@
 import asyncio
-import os
-
 from aiosmtpd.controller import Controller
 
 from smtp_server import MailHandler
@@ -9,10 +7,7 @@ from telegram_bot import TelegramBot
 
 SMTP_HOST = "0.0.0.0"
 SMTP_PORT = 25
-TELEGRAM_TOKEN = os.getenv(
-    "TELEGRAM_TOKEN",
-    "8476649791:AAGSNbatatUasGP2wct88Rw4IVN0_J2sAMU",
-)
+TELEGRAM_TOKEN = "8476649791:AAGSNbatatUasGP2wct88Rw4IVN0_J2sAMU"
 
 
 async def main():
