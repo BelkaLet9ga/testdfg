@@ -8,6 +8,22 @@ from typing import Optional
 DB_PATH = Path(__file__).parent / "tempmail.db"
 DOMAIN = "1398hnjfkdskd.de"
 
+FIRST_NAMES = [
+    "alex", "max", "oliver", "daniel", "chris", "peter", "john", "michael", "david", "nick",
+    "andrew", "mark", "paul", "luke", "jake", "tom", "harry", "leo", "jack", "ryan",
+    "adam", "owen", "eric", "kevin", "bruce", "ethan", "cole", "blake", "grant", "henry",
+    "felix", "brian", "isaac", "sam", "liam", "noah", "aaron", "tyler", "vince", "roman",
+    "shane", "nate", "caleb", "joel", "ellis", "gavin", "logan", "zack", "quinn", "seth",
+]
+
+LAST_NAMES = [
+    "smith", "johnson", "williams", "brown", "jones", "miller", "davis", "wilson", "taylor", "anderson",
+    "thomas", "jackson", "white", "harris", "martin", "thompson", "garcia", "martinez", "robinson", "clark",
+    "rodriguez", "lewis", "lee", "walker", "hall", "allen", "young", "hernandez", "king", "wright",
+    "lopez", "hill", "scott", "green", "adams", "baker", "gonzalez", "nelson", "carter", "mitchell",
+    "perez", "roberts", "turner", "phillips", "campbell", "parker", "evans", "edwards", "collins", "stewart",
+]
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -108,14 +124,17 @@ def ensure_user(telegram_id: int, name: Optional[str] = None) -> dict:
     return dict(created)
 
 
-def _generate_local_part(length: int = 10) -> str:
-    alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choice(alphabet) for _ in range(length))
-
-
 def _generate_password(length: int = 12) -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(random.choice(alphabet) for _ in range(length))
+
+
+def _generate_address() -> str:
+    first = random.choice(FIRST_NAMES)
+    last = random.choice(LAST_NAMES)
+    digits = "".join(random.choice(string.digits) for _ in range(random.randint(2, 4)))
+    local = f"{first}.{last}{digits}"
+    return f"{local}@{DOMAIN}".lower()
 
 
 def ensure_mailbox_record(user_id: int) -> dict:
@@ -138,8 +157,7 @@ def ensure_mailbox_record(user_id: int) -> dict:
 
 def _create_mailbox(cur: sqlite3.Cursor, user_id: int) -> dict:
     while True:
-        local = _generate_local_part()
-        address = f"{local}@{DOMAIN}".lower()
+        address = _generate_address()
         password = _generate_password()
         created_at = datetime.utcnow().isoformat()
         try:
