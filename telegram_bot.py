@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from html import escape
-import io
-import re
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -27,7 +25,7 @@ from storage import (
 
 MESSAGE_LIMIT = 5
 MAX_MESSAGE_LENGTH = 3500
-URL_RE = re.compile(r"https?://\S+")
+TRUNCATION_NOTICE = "\n...\n[Текст обрезан]"
 
 
 def _format_datetime(value: str) -> str:
@@ -148,19 +146,18 @@ class TelegramBot:
                 return
             body = (email.get("body") or "").strip()
             if len(body) > MAX_MESSAGE_LENGTH:
-                await self._send_long_email(chat_id, email, body)
-            else:
-                text = (
-                    f"<b>От:</b> {escape(email.get('sender') or 'Неизвестно')}\n"
-                    f"<b>Тема:</b> {escape(email.get('subject') or '(без темы)')}\n"
-                    f"<b>Получено:</b> {escape(email.get('received_at') or '')}\n\n"
-                    f"<pre>{escape(body or '[Пустое тело]')}</pre>"
-                )
-                await self.application.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
+                body = body[: MAX_MESSAGE_LENGTH - len(TRUNCATION_NOTICE)] + TRUNCATION_NOTICE
+            text = (
+                f"<b>От:</b> {escape(email.get('sender') or 'Неизвестно')}\n"
+                f"<b>Тема:</b> {escape(email.get('subject') or '(без темы)')}\n"
+                f"<b>Получено:</b> {escape(email.get('received_at') or '')}\n\n"
+                f"<pre>{escape(body or '[Пустое тело]')}</pre>"
+            )
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+            )
             await query.answer()
             return
 
@@ -214,32 +211,3 @@ class TelegramBot:
                 parse_mode="HTML",
                 reply_markup=markup,
             )
-
-    async def _send_long_email(self, chat_id: int, email: dict, body: str) -> None:
-        links = _extract_links(body)
-        links_block = "\n".join(links) if links else "Ссылок нет"
-        info_text = (
-            f"<b>Отправитель:</b> {escape(email.get('sender') or 'Неизвестно')}\n"
-            f"<b>Почта:</b> {escape(email.get('recipient') or '—')}\n"
-            f"<b>Ссылки:</b>\n{escape(links_block)}"
-        )
-        await self.application.bot.send_message(
-            chat_id=chat_id,
-            text=info_text,
-            parse_mode="HTML",
-        )
-
-        buffer = io.BytesIO(body.encode("utf-8"))
-        buffer.name = f"email-{email.get('id', 'unknown')}.txt"
-        await self.application.bot.send_document(
-            chat_id=chat_id,
-            document=buffer,
-            caption="Полный текст письма во вложении.",
-        )
-
-
-def _extract_links(text: str) -> list[str]:
-    links = []
-    for match in URL_RE.findall(text or ""):
-        links.append(match.rstrip(".,);"))
-    return links
