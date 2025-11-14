@@ -5,7 +5,12 @@ from aiosmtpd.controller import Controller
 import sqlite3
 from pathlib import Path
 
+from app import init_db
+
 DB_PATH = Path(__file__).parent / "tempmail.db"
+
+# Гарантируем, что таблица БД создана, даже если SMTP запускают отдельно.
+init_db()
 
 
 def save_email(recipient, sender, subject, body):
