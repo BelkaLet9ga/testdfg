@@ -14,7 +14,11 @@ python -m venv .venv
 pip install aiosmtpd python-telegram-bot
 ```
 
-Токен бота уже зашит в `run.py`, при необходимости замените его вручную.
+Настройте переменные в `.env` (файл не коммитим). Скопируйте пример и впишите токен своего бота:
+```powershell
+copy .env.example .env
+notepad .env  # TELEGRAM_TOKEN=...
+```
 
 ## Запуск
 ```powershell

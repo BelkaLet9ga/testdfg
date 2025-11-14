@@ -1,18 +1,30 @@
 import asyncio
+import os
+
 from aiosmtpd.controller import Controller
 
+from config import load_env
 from smtp_server import MailHandler
 from storage import init_db
 from telegram_bot import TelegramBot
 
 SMTP_HOST = "0.0.0.0"
 SMTP_PORT = 25
-TELEGRAM_TOKEN = "8476649791:AAGSNbatatUasGP2wct88Rw4IVN0_J2sAMU"
+
+
+def get_token() -> str:
+    load_env()
+    token = os.getenv("TELEGRAM_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "Переменная TELEGRAM_TOKEN не задана. Добавьте её в .env или окружение."
+        )
+    return token
 
 
 async def main():
     init_db()
-    bot = TelegramBot(TELEGRAM_TOKEN)
+    bot = TelegramBot(get_token())
     await bot.start()
 
     handler = MailHandler(notifier=bot)
