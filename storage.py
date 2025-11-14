@@ -127,8 +127,15 @@ def ensure_user(telegram_id: int, name: Optional[str] = None) -> dict:
 def _generate_password(length: int = 24) -> str:
     alphabet = string.ascii_letters + string.digits + string.punctuation
     rng = random.SystemRandom()
-    pwd = "".join(rng.choice(alphabet) for _ in range(length))
-    return pwd
+    while True:
+        pwd = "".join(rng.choice(alphabet) for _ in range(length))
+        if (
+            any(c.islower() for c in pwd)
+            and any(c.isupper() for c in pwd)
+            and any(c.isdigit() for c in pwd)
+            and any(c in string.punctuation for c in pwd)
+        ):
+            return pwd
 
 
 def _generate_address() -> str:
