@@ -224,6 +224,8 @@ def attach_mailbox(user_id: int, address: str, password: str) -> Optional[dict]:
     if not row:
         conn.close()
         return None
+    # деактивируем прежние ящики пользователя
+    cur.execute("UPDATE mailboxes SET active=0 WHERE user_id=?", (user_id,))
     cur.execute(
         "UPDATE mailboxes SET user_id=?, active=1 WHERE id=?",
         (user_id, row["id"]),
