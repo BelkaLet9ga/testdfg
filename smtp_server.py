@@ -68,7 +68,7 @@ class MailHandler:
             )
             if self.notifier:
                 await self.notifier.notify_new_email(
-                    address, sender_header, subject, body_plain
+                    address, sender_header, subject, body_plain, body_html
                 )
 
         return "250 Message accepted"

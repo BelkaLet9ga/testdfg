@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import re
 from html import escape
 from html.parser import HTMLParser
 from typing import Optional
@@ -28,6 +29,7 @@ from storage import (
 MESSAGE_LIMIT = 5
 MAX_MESSAGE_LENGTH = 3500
 TRUNCATION_NOTICE = "\n...\n[Текст обрезан]"
+CODE_RE = re.compile(r"\b(?:\d{4,8}|[A-Z0-9]{4,10})\b")
 
 
 def _format_datetime(value: str) -> str:
@@ -91,6 +93,47 @@ def _extract_links(html: str) -> list[tuple[str, str]]:
     return parser.links
 
 
+class _TextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.chunks: list[str] = []
+
+    def handle_data(self, data):
+        self.chunks.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self.chunks)
+
+
+def _html_to_text(html_content: str) -> str:
+    parser = _TextParser()
+    parser.feed(html_content or "")
+    return parser.get_text()
+
+
+def _normalize_body(body_plain: str, body_html: str) -> str:
+    text = body_plain or ""
+    if not text.strip() and body_html:
+        return _html_to_text(body_html)
+    if "<" in text and ">" in text and body_html:
+        return _html_to_text(body_html)
+    return text
+
+
+def _extract_codes(text: str) -> list[str]:
+    if not text:
+        return []
+    result = []
+    seen = set()
+    for match in CODE_RE.findall(text):
+        code = match.strip()
+        if code.upper() in seen:
+            continue
+        seen.add(code.upper())
+        result.append(code)
+    return result[:5]
+
+
 class TelegramBot:
     def __init__(self, token: str):
         self.application = Application.builder().token(token).build()
@@ -121,14 +164,22 @@ class TelegramBot:
         await self.application.shutdown()
 
     async def notify_new_email(
-        self, recipient: str, sender: str, subject: str, body: str
+        self,
+        recipient: str,
+        sender: str,
+        subject: str,
+        body_plain: str,
+        body_html: str,
     ) -> None:
         owner = get_user_for_address(recipient)
         if not owner or not owner.get("telegram_id"):
             return
-        preview = _short(body, 200)
+        normalized_text = _normalize_body(body_plain or "", body_html or "")
+        preview = _short(normalized_text, 200)
         buttons = []
         links = _extract_links(body_html or "")
+        codes = _extract_codes(normalized_text)
+
         for title, href in links[:3]:
             buttons.append(
                 [
@@ -144,6 +195,12 @@ class TelegramBot:
             f"└ <b>{escape(subject or '(без темы)')}</b>\n\n"
             f"{escape(preview or '[Пустое тело]')}"
         )
+        if codes:
+            text += "\n\n<b>Коды из письма:</b>\n" + "\n".join(
+                f"{idx}. <code>{escape(code)}</code>"
+                for idx, code in enumerate(codes, start=1)
+            )
+
         buttons.append([InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")])
         keyboard = InlineKeyboardMarkup(buttons)
         await self.application.bot.send_message(
@@ -207,10 +264,15 @@ class TelegramBot:
             if not email:
                 await query.answer("Письмо не найдено", show_alert=True)
                 return
-            body = (email.get("body") or "").strip()
+            normalized_text = _normalize_body(
+                email.get("body_plain") or email.get("body") or "",
+                email.get("body_html") or "",
+            )
+            body = normalized_text
             if len(body) > MAX_MESSAGE_LENGTH:
                 body = body[: MAX_MESSAGE_LENGTH - len(TRUNCATION_NOTICE)] + TRUNCATION_NOTICE
             links = _extract_links(email.get("body_html") or "")
+            codes = _extract_codes(normalized_text)
             links_block = ""
             if links:
                 rendered = []
@@ -219,12 +281,19 @@ class TelegramBot:
                         f"{idx}. <a href=\"{escape(href)}\">{escape(title)}</a>"
                     )
                 links_block = "\n\n<b>Ссылки из письма:</b>\n" + "\n".join(rendered)
+            codes_block = ""
+            if codes:
+                codes_block = "\n\n<b>Коды:</b>\n" + "\n".join(
+                    f"{idx}. <code>{escape(code)}</code>"
+                    for idx, code in enumerate(codes, start=1)
+                )
             text = (
                 f"<b>От:</b> {escape(email.get('sender') or 'Неизвестно')}\n"
                 f"<b>Тема:</b> {escape(email.get('subject') or '(без темы)')}\n"
                 f"<b>Получено:</b> {escape(email.get('received_at') or '')}\n\n"
                 f"<pre>{escape(body or '[Пустое тело]')}</pre>"
                 f"{links_block}"
+                f"{codes_block}"
             )
             await self.application.bot.send_message(
                 chat_id=chat_id,
