@@ -59,6 +59,37 @@ def _split_sender(raw: str) -> tuple[str, str]:
     return raw, raw
 
 
+def _build_notification_text(state: dict) -> str:
+    text = (
+        "<b>📨 Новое письмо</b>\n"
+        f"├ {escape(state['sender_line'])}\n"
+        f"└ <b><code>{escape(state['subject'])}</code></b>\n\n"
+    )
+    if state.get("code"):
+        code_display = state["code"] if state["code_visible"] else "✱✱✱✱"
+        text += f"<b>🔏 Возможный код:</b> <code>{escape(code_display)}</code>"
+    else:
+        text += "Код не обнаружен."
+    return text
+
+
+def _build_notification_keyboard(state: dict) -> list[list[InlineKeyboardButton]]:
+    buttons: list[list[InlineKeyboardButton]] = []
+    if state.get("code"):
+        label = "👁 Скрыть код" if state["code_visible"] else "👁 Показать код"
+        buttons.append([InlineKeyboardButton(label, callback_data="notif_code")])
+    if state.get("links"):
+        icon = "▼" if state["links_open"] else "⌵"
+        buttons.append(
+            [InlineKeyboardButton(f"🔗 Показать ссылки {icon}", callback_data="notif_links")]
+        )
+        if state["links_open"]:
+            for title, href in state["links"]:
+                buttons.append([InlineKeyboardButton(title[:32] or href, url=href)])
+    buttons.append([InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")])
+    return buttons
+
+
 class _LinkParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -153,6 +184,7 @@ class TelegramBot:
         self._password_visible: dict[int, bool] = {}
         self._inbox_state: dict[int, dict[str, int | bool]] = {}
         self._auth_state: dict[int, dict[str, str]] = {}
+        self._notif_state: dict[tuple[int, int], dict] = {}
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -186,44 +218,26 @@ class TelegramBot:
         if not owner or not owner.get("telegram_id"):
             return
         normalized_text = _normalize_body(body_plain or "", body_html or "")
-        preview = ""
-        buttons = []
-        links = _extract_links(body_html or "")
+        links = _extract_links(body_html or "")[:3]
         codes = _extract_codes(normalized_text)
 
-        for title, href in links[:3]:
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        title[:32] or href, url=href
-                    )
-                ]
-            )
         name, email = _split_sender(sender or "")
-        text = (
-            "<b>🔔 Новое письмо</b>\n"
-            f"├ {escape(name)} &lt;{escape(email)}&gt;\n"
-            f"└ <b>{escape(subject or '(без темы)')}</b>\n\n"
-        )
-        if codes:
-            text += (
-                "<b>📧 Ваш код:</b> "
-                + " / ".join(f"<code>{escape(code)}</code>" for code in codes[:3])
-                + "\n\n"
-            )
-        else:
-            text += f"{escape(_short(normalized_text, 120) or '[Пустое тело]')}\n\n"
-        if links and not codes:
-            text += "Нажмите кнопку, чтобы открыть ссылку.\n"
-
-        buttons.append([InlineKeyboardButton("🔍 Открыть письмо", callback_data="refresh")])
-        keyboard = InlineKeyboardMarkup(buttons)
-        await self.application.bot.send_message(
+        state = {
+            "sender_line": f"{name} <{email}>",
+            "subject": subject or "(без темы)",
+            "code": codes[0] if codes else None,
+            "code_visible": False,
+            "links": links,
+            "links_open": False,
+        }
+        keyboard = InlineKeyboardMarkup(_build_notification_keyboard(state))
+        message = await self.application.bot.send_message(
             chat_id=int(owner["telegram_id"]),
-            text=text,
+            text=self._build_notification_text(state),
             parse_mode="HTML",
             reply_markup=keyboard,
         )
+        self._notif_state[(message.chat_id, message.message_id)] = state
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
@@ -335,6 +349,38 @@ class TelegramBot:
                 chat_id=chat_id,
                 text="Введите логин (email) почты, в которую хотите войти:",
             )
+            return
+
+        if data == "notif_code":
+            state = self._notif_state.get((chat_id, message_id))
+            if not state or not state.get("code"):
+                await query.answer("Код не найден")
+                return
+            state["code_visible"] = not state["code_visible"]
+            await self.application.bot.edit_message_text(
+                text=_build_notification_text(state),
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(_build_notification_keyboard(state)),
+            )
+            await query.answer()
+            return
+
+        if data == "notif_links":
+            state = self._notif_state.get((chat_id, message_id))
+            if not state or not state.get("links"):
+                await query.answer("Ссылок нет")
+                return
+            state["links_open"] = not state["links_open"]
+            await self.application.bot.edit_message_text(
+                text=_build_notification_text(state),
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(_build_notification_keyboard(state)),
+            )
+            await query.answer()
             return
 
         if data == "refresh":
