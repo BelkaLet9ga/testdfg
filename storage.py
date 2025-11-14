@@ -212,6 +212,29 @@ def get_mailbox_by_address(address: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def attach_mailbox(user_id: int, address: str, password: str) -> Optional[dict]:
+    """Переназначает существующий ящик пользователю, если пароль совпадает."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT * FROM mailboxes WHERE address=? AND password=? AND active=1",
+        (address.lower(), password),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+    cur.execute(
+        "UPDATE mailboxes SET user_id=?, active=1 WHERE id=?",
+        (user_id, row["id"]),
+    )
+    conn.commit()
+    cur.execute("SELECT * FROM mailboxes WHERE id=?", (row["id"],))
+    updated = cur.fetchone()
+    conn.close()
+    return dict(updated)
+
+
 def get_user_for_address(address: str) -> Optional[dict]:
     conn = get_db()
     cur = conn.cursor()

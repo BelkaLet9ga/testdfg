@@ -13,10 +13,13 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 from telegram.error import BadRequest
 
 from storage import (
+    attach_mailbox,
     change_mailbox,
     count_messages,
     ensure_mailbox_record,
@@ -142,10 +145,14 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("inbox", self.cmd_inbox))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CallbackQueryHandler(self.on_callback))
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
+        )
         self._polling_task: Optional[asyncio.Task] = None
         self._tools_state: dict[int, bool] = {}
         self._password_visible: dict[int, bool] = {}
         self._inbox_state: dict[int, dict[str, int | bool]] = {}
+        self._auth_state: dict[int, dict[str, str]] = {}
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -238,6 +245,42 @@ class TelegramBot:
             "/help — краткая справка"
         )
 
+    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_user or not update.message or not update.effective_chat:
+            return
+        chat_id = update.effective_chat.id
+        state = self._auth_state.get(chat_id)
+        if not state:
+            return
+        text = update.message.text.strip()
+        if text.lower() in {"/cancel", "отмена"}:
+            self._auth_state.pop(chat_id, None)
+            await update.message.reply_text("Авторизация отменена.")
+            return
+
+        if state.get("step") == "login":
+            state["login"] = text
+            state["step"] = "password"
+            await update.message.reply_text("Введите пароль:")
+            return
+
+        if state.get("step") == "password":
+            login = state.get("login")
+            password = text
+            user_record = ensure_user(update.effective_user.id, update.effective_user.full_name)
+            mailbox = attach_mailbox(user_record["id"], login, password)
+            if mailbox:
+                self._auth_state.pop(chat_id, None)
+                await update.message.reply_text(f"Вы вошли в {mailbox['address']}")
+                await self._send_dashboard(chat_id, update.effective_user)
+            else:
+                state["step"] = "login"
+                state.pop("login", None)
+                await update.message.reply_text(
+                    "Неверный логин или пароль. Попробуйте снова или напишите /cancel."
+                )
+            return
+
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         if not query or not query.from_user or not query.message:
@@ -283,6 +326,15 @@ class TelegramBot:
                 chat_id, query.from_user, message_id, toggle_password=True
             )
             await query.answer()
+            return
+
+        if data == "auth_start":
+            self._auth_state[chat_id] = {"step": "login"}
+            await query.answer()
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text="Введите логин (email) почты, в которую хотите войти:",
+            )
             return
 
         if data == "refresh":
@@ -459,6 +511,7 @@ class TelegramBot:
         if tools_open:
             label = "Пароль: не видно" if password_visible else "Пароль: видно"
             keyboard.append([InlineKeyboardButton(label, callback_data="toggle_pwd")])
+            keyboard.append([InlineKeyboardButton("👤 Войти в почту", callback_data="auth_start")])
             keyboard.append([InlineKeyboardButton("↻ Обновить", callback_data="refresh")])
             keyboard.append([InlineKeyboardButton("✏️ Изменить почту", callback_data="change")])
         markup = InlineKeyboardMarkup(keyboard)
