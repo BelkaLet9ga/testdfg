@@ -246,6 +246,13 @@ class TelegramBot:
             await query.answer("Писем пока нет")
             return
 
+        if data == "toggle_tools":
+            await self._send_dashboard(
+                chat_id, query.from_user, message_id, toggle_tools=True
+            )
+            await query.answer()
+            return
+
         if data == "refresh":
             await self._send_dashboard(chat_id, query.from_user, message_id)
             await query.answer("Список обновлён")
@@ -308,7 +315,11 @@ class TelegramBot:
             return
 
     async def _send_dashboard(
-        self, chat_id: int, telegram_user, message_id: Optional[int] = None
+        self,
+        chat_id: int,
+        telegram_user,
+        message_id: Optional[int] = None,
+        toggle_tools: bool = False,
     ) -> None:
         user_record = ensure_user(telegram_user.id, telegram_user.full_name)
         mailbox = ensure_mailbox_record(user_record["id"])
@@ -326,6 +337,7 @@ class TelegramBot:
         )
 
         keyboard: list[list[InlineKeyboardButton]] = []
+        tools_open = False
         if not letters:
             keyboard.append([InlineKeyboardButton("📄 Ящик пустой", callback_data="noop")])
         else:
@@ -336,8 +348,18 @@ class TelegramBot:
                 keyboard.append(
                     [InlineKeyboardButton(title, callback_data=f"msg:{mail['id']}")]
                 )
-        keyboard.append([InlineKeyboardButton("↻ Обновить", callback_data="refresh")])
-        keyboard.append([InlineKeyboardButton("✏️ Изменить почту", callback_data="change")])
+        if message_id and telegram_user:
+            tools_open = getattr(telegram_user, "tools_open", False)
+        if toggle_tools:
+            tools_open = not tools_open
+        if hasattr(telegram_user, "__dict__"):
+            telegram_user.tools_open = tools_open
+
+        icon = "▼" if tools_open else "⌵"
+        keyboard.append([InlineKeyboardButton(f"🧰 Инструменты {icon}", callback_data="toggle_tools")])
+        if tools_open:
+            keyboard.append([InlineKeyboardButton("↻ Обновить", callback_data="refresh")])
+            keyboard.append([InlineKeyboardButton("✏️ Изменить почту", callback_data="change")])
         markup = InlineKeyboardMarkup(keyboard)
 
         if message_id:
