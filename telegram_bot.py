@@ -233,7 +233,7 @@ class TelegramBot:
         keyboard = InlineKeyboardMarkup(_build_notification_keyboard(state))
         message = await self.application.bot.send_message(
             chat_id=int(owner["telegram_id"]),
-            text=self._build_notification_text(state),
+            text=_build_notification_text(state),
             parse_mode="HTML",
             reply_markup=keyboard,
         )
