@@ -68,8 +68,6 @@ def _build_notification_text(state: dict) -> str:
     if state.get("code"):
         code_display = state["code"] if state["code_visible"] else "✱✱✱✱"
         text += f"<b>🔏 Возможный код:</b> <code>{escape(code_display)}</code>"
-    else:
-        text += "Код не обнаружен."
     return text
 
 
