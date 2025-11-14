@@ -124,9 +124,11 @@ def ensure_user(telegram_id: int, name: Optional[str] = None) -> dict:
     return dict(created)
 
 
-def _generate_password(length: int = 12) -> str:
-    alphabet = string.ascii_letters + string.digits
-    return "".join(random.choice(alphabet) for _ in range(length))
+def _generate_password(length: int = 24) -> str:
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    rng = random.SystemRandom()
+    pwd = "".join(rng.choice(alphabet) for _ in range(length))
+    return pwd
 
 
 def _generate_address() -> str:
