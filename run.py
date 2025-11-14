@@ -1,33 +1,36 @@
 import asyncio
+import os
 
-import uvicorn
 from aiosmtpd.controller import Controller
 
-from app import app, init_db
 from smtp_server import MailHandler
+from storage import init_db
+from telegram_bot import TelegramBot
 
-API_HOST = "0.0.0.0"
-API_PORT = 8000
 SMTP_HOST = "0.0.0.0"
 SMTP_PORT = 25
+TELEGRAM_TOKEN = os.getenv(
+    "TELEGRAM_TOKEN",
+    "8476649791:AAGSNbatatUasGP2wct88Rw4IVN0_J2sAMU",
+)
 
 
 async def main():
-    """Запускает SMTP и HTTP сервисы в одном процессе."""
     init_db()
-    handler = MailHandler()
+    bot = TelegramBot(TELEGRAM_TOKEN)
+    await bot.start()
+
+    handler = MailHandler(notifier=bot)
     controller = Controller(handler, hostname=SMTP_HOST, port=SMTP_PORT)
     controller.start()
     print(f"SMTP: {SMTP_HOST}:{SMTP_PORT}")
-    print(f"HTTP: http://{API_HOST}:{API_PORT}")
-
-    config = uvicorn.Config(app, host=API_HOST, port=API_PORT, log_level="info")
-    server = uvicorn.Server(config)
+    print("Telegram-бот запущен. Нажмите Ctrl+C для остановки.")
 
     try:
-        await server.serve()
+        await bot.idle()
     finally:
         controller.stop()
+        await bot.stop()
 
 
 if __name__ == "__main__":

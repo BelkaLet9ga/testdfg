@@ -1,36 +1,45 @@
-# Temp Mailer MVP
+# Temp Mailer Bot
 
-Простой учебный сервис одноразовой почты:
+MVP принимает письма через SMTP и пересылает их в Telegram-бота. Для каждого пользователя создаётся свой временный ящик, новые письма сразу отправляются в чат.
 
-- HTTP/UI часть на FastAPI (`app.py`) генерирует временный адрес и показывает поступившие письма.
-- SMTP‑приёмник (`smtp_server.py`) принимает письма через `aiosmtpd` и пишет их в SQLite.
-- Скрипт `run.py` запускает оба процесса одной командой.
+## Стек
+- SMTP сервер: `aiosmtpd`
+- Telegram-бот: `python-telegram-bot`
+- Хранилище: SQLite (`tempmail.db`)
 
-## Подготовка окружения
-
+## Подготовка
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install fastapi uvicorn aiosmtpd
+pip install aiosmtpd python-telegram-bot
+```
+
+Укажите токен бота через переменную среды, либо оставьте значение по умолчанию из `run.py`:
+```powershell
+$env:TELEGRAM_TOKEN = "8476649791:xxxxxxxxxxxx"
 ```
 
 ## Запуск
-
 ```powershell
 python run.py
 ```
 
-- HTTP часть доступна по умолчанию на `http://127.0.0.1:8000`.
-- SMTP слушает порт `25` на всех интерфейсах.
+- SMTP по умолчанию слушает `0.0.0.0:25`.
+- Бот начинает polling и отвечает на команды `/start` и `/inbox`.
 
-Остановить сервисы можно `Ctrl+C`.
+Остановить можно `Ctrl+C`. При запуске на сервере оберните команду в systemd/tmux/supervisor.
 
-## Публикация в Git
-
-Репозиторий уже инициализирован локально (`master`). Чтобы отправить код в новый Git‑репозиторий:
-
+## Работа с Git
+Репозиторий уже инициализирован. Чтобы отправить код на удалённый Git:
 ```powershell
 git remote add origin <ssh-или-https-URL>
 git branch -M main
 git push -u origin main
+```
+
+На сервере:
+```bash
+git clone <ssh-или-https-URL> tempmail
+cd tempmail
+git pull   # для обновлений
 ```

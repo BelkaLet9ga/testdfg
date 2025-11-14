@@ -1,49 +1,47 @@
-import asyncio
-from datetime import datetime
+from __future__ import annotations
+
+from email.message import Message
 from email.parser import BytesParser
-from aiosmtpd.controller import Controller
-import sqlite3
-from pathlib import Path
 
-from app import init_db
-
-DB_PATH = Path(__file__).parent / "tempmail.db"
-
-# Гарантируем, что таблица БД создана, даже если SMTP запускают отдельно.
-init_db()
+from storage import save_email
 
 
-def save_email(recipient, sender, subject, body):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO emails (recipient, sender, subject, body, received_at) VALUES (?, ?, ?, ?, ?)",
-        (recipient, sender, subject, body, datetime.utcnow().isoformat())
-    )
-    conn.commit()
-    conn.close()
+def _extract_body(msg: Message) -> str:
+    if msg.is_multipart():
+        parts: list[str] = []
+        for part in msg.walk():
+            if part.get_content_maintype() != "text":
+                continue
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            parts.append(payload.decode(charset, errors="replace"))
+        if parts:
+            return "\n\n".join(parts)
+        return msg.get_payload()
+
+    payload = msg.get_payload(decode=True)
+    if payload is None:
+        return ""
+    charset = msg.get_content_charset() or "utf-8"
+    return payload.decode(charset, errors="replace")
 
 
 class MailHandler:
+    def __init__(self, notifier=None):
+        self.notifier = notifier
+
     async def handle_DATA(self, server, session, envelope):
         msg = BytesParser().parsebytes(envelope.content)
         sender = msg.get("From", "")
         subject = msg.get("Subject", "")
-        body = msg.get_payload()
+        body = _extract_body(msg)
 
         for rcpt in envelope.rcpt_tos:
-            save_email(rcpt, sender, subject, body)
+            address = rcpt.lower()
+            save_email(address, sender, subject, body)
+            if self.notifier:
+                await self.notifier.notify_new_email(address, sender, subject, body)
 
         return "250 Message accepted"
-
-
-if __name__ == "__main__":
-    handler = MailHandler()
-    controller = Controller(handler, hostname="0.0.0.0", port=25)
-    controller.start()
-
-    print("SMTP server running on :25 ...")
-    try:
-        asyncio.get_event_loop().run_forever()
-    except KeyboardInterrupt:
-        pass
