@@ -26,7 +26,8 @@ from storage import (
     list_messages,
 )
 
-MESSAGE_LIMIT = 5
+MESSAGE_PAGE_SIZE = 5
+MESSAGE_FETCH_LIMIT = 50
 MAX_MESSAGE_LENGTH = 3500
 TRUNCATION_NOTICE = "\n...\n[Текст обрезан]"
 CODE_RE = re.compile(r"\b(?:\d{4,8}|[A-Z0-9]{4,10})\b")
@@ -144,6 +145,7 @@ class TelegramBot:
         self._polling_task: Optional[asyncio.Task] = None
         self._tools_state: dict[int, bool] = {}
         self._password_visible: dict[int, bool] = {}
+        self._inbox_state: dict[int, dict[str, int | bool]] = {}
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -248,6 +250,27 @@ class TelegramBot:
             await query.answer("Писем пока нет")
             return
 
+        if data == "toggle_inbox":
+            await self._send_dashboard(
+                chat_id, query.from_user, message_id, toggle_inbox=True
+            )
+            await query.answer()
+            return
+
+        if data == "inbox_prev":
+            await self._send_dashboard(
+                chat_id, query.from_user, message_id, page_shift=-1
+            )
+            await query.answer()
+            return
+
+        if data == "inbox_next":
+            await self._send_dashboard(
+                chat_id, query.from_user, message_id, page_shift=1
+            )
+            await query.answer()
+            return
+
         if data == "toggle_tools":
             await self._send_dashboard(
                 chat_id, query.from_user, message_id, toggle_tools=True
@@ -330,13 +353,15 @@ class TelegramBot:
         message_id: Optional[int] = None,
         toggle_tools: bool = False,
         toggle_password: bool = False,
+        toggle_inbox: bool = False,
+        page_shift: int = 0,
     ) -> None:
         user_record = ensure_user(telegram_user.id, telegram_user.full_name)
         mailbox = ensure_mailbox_record(user_record["id"])
         address = mailbox["address"]
         created_at = _format_datetime(mailbox["created_at"])
         total = count_messages(mailbox["id"])
-        letters = list_messages(mailbox["id"], limit=MESSAGE_LIMIT)
+        letters = list_messages(mailbox["id"], limit=MESSAGE_FETCH_LIMIT)
 
         password_visible = self._password_visible.get(chat_id, False)
         if toggle_password:
@@ -355,18 +380,75 @@ class TelegramBot:
             f"<b>└ Дата создания:</b> <code>{escape(created_at)}</code>"
         )
 
+        inbox_state = self._inbox_state.get(
+            chat_id, {"open": False, "page": 0}
+        )
+        if toggle_inbox:
+            inbox_state["open"] = not inbox_state["open"]
+        if inbox_state["open"] and page_shift:
+            inbox_state["page"] += page_shift
+        if not inbox_state["open"]:
+            inbox_state["page"] = 0
+        total_pages = max(
+            1, (len(letters) + MESSAGE_PAGE_SIZE - 1) // MESSAGE_PAGE_SIZE
+        )
+        inbox_state["page"] = max(
+            0, min(inbox_state["page"], total_pages - 1)
+        )
+        self._inbox_state[chat_id] = inbox_state
+        inbox_open = inbox_state["open"]
+        current_page = inbox_state["page"]
+
         keyboard: list[list[InlineKeyboardButton]] = []
-        tools_open = False
-        if not letters:
-            keyboard.append([InlineKeyboardButton("📄 Ящик пустой", callback_data="noop")])
-        else:
-            for mail in letters:
-                sender = mail.get("sender") or "Без имени"
-                subject = mail.get("subject") or "(без темы)"
-                title = _short(f"{sender} - {subject}")
+        inbox_icon = "▼" if inbox_open else "⌵"
+        keyboard.append(
+            [InlineKeyboardButton(f"📧 Входящие {inbox_icon}", callback_data="toggle_inbox")]
+        )
+        if inbox_open:
+            if not letters:
                 keyboard.append(
-                    [InlineKeyboardButton(title, callback_data=f"msg:{mail['id']}")]
+                    [InlineKeyboardButton("Писем нет", callback_data="noop")]
                 )
+            else:
+                start = current_page * MESSAGE_PAGE_SIZE
+                page_letters = letters[start : start + MESSAGE_PAGE_SIZE]
+                if not page_letters:
+                    keyboard.append(
+                        [InlineKeyboardButton("Писем нет", callback_data="noop")]
+                    )
+                else:
+                    for mail in page_letters:
+                        sender = mail.get("sender") or "Без имени"
+                        subject = mail.get("subject") or "(без темы)"
+                        title = _short(f"{sender} - {subject}")
+                        keyboard.append(
+                            [
+                                InlineKeyboardButton(
+                                    title, callback_data=f"msg:{mail['id']}"
+                                )
+                            ]
+                        )
+                    if total_pages > 1:
+                        row: list[InlineKeyboardButton] = []
+                        if current_page > 0:
+                            row.append(
+                                InlineKeyboardButton(
+                                    "◀️", callback_data="inbox_prev"
+                                )
+                            )
+                        row.append(
+                            InlineKeyboardButton(
+                                f"{current_page + 1}/{total_pages}",
+                                callback_data="noop",
+                            )
+                        )
+                        if current_page < total_pages - 1:
+                            row.append(
+                                InlineKeyboardButton(
+                                    "▶️", callback_data="inbox_next"
+                                )
+                            )
+                        keyboard.append(row)
         tools_open = self._tools_state.get(chat_id, False)
         if toggle_tools:
             tools_open = not tools_open
