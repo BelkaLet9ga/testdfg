@@ -142,6 +142,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CallbackQueryHandler(self.on_callback))
         self._polling_task: Optional[asyncio.Task] = None
+        self._tools_state: dict[int, bool] = {}
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -348,12 +349,10 @@ class TelegramBot:
                 keyboard.append(
                     [InlineKeyboardButton(title, callback_data=f"msg:{mail['id']}")]
                 )
-        if message_id and telegram_user:
-            tools_open = getattr(telegram_user, "tools_open", False)
+        tools_open = self._tools_state.get(chat_id, False)
         if toggle_tools:
             tools_open = not tools_open
-        if hasattr(telegram_user, "__dict__"):
-            telegram_user.tools_open = tools_open
+        self._tools_state[chat_id] = tools_open
 
         icon = "▼" if tools_open else "⌵"
         keyboard.append([InlineKeyboardButton(f"🧰 Инструменты {icon}", callback_data="toggle_tools")])
