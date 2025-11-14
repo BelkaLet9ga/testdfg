@@ -7,25 +7,26 @@ from storage import save_email
 
 
 def _extract_body(msg: Message) -> str:
+    def decode(part: Message) -> str:
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return ""
+        charset = part.get_content_charset() or "utf-8"
+        return payload.decode(charset, errors="replace")
+
     if msg.is_multipart():
-        parts: list[str] = []
+        fallback = ""
         for part in msg.walk():
             if part.get_content_maintype() != "text":
                 continue
-            payload = part.get_payload(decode=True)
-            if payload is None:
-                continue
-            charset = part.get_content_charset() or "utf-8"
-            parts.append(payload.decode(charset, errors="replace"))
-        if parts:
-            return "\n\n".join(parts)
-        return msg.get_payload()
+            text = decode(part)
+            if part.get_content_subtype() == "plain":
+                return text
+            if not fallback and text:
+                fallback = text
+        return fallback
 
-    payload = msg.get_payload(decode=True)
-    if payload is None:
-        return ""
-    charset = msg.get_content_charset() or "utf-8"
-    return payload.decode(charset, errors="replace")
+    return decode(msg)
 
 
 class MailHandler:
