@@ -141,7 +141,7 @@ def ensure_mailbox_record(user_id: int) -> dict:
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM mailboxes WHERE user_id=? AND active=1 LIMIT 1",
+         "SELECT * FROM mailboxes WHERE user_id=? AND active=1 ORDER BY id DESC LIMIT 1",
         (user_id,),
     )
     row = cur.fetchone()
@@ -192,7 +192,7 @@ def get_mailbox_record(user_id: int) -> Optional[dict]:
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM mailboxes WHERE user_id=? AND active=1 LIMIT 1",
+        "SELECT * FROM mailboxes WHERE user_id=? AND active=1 ORDER BY id DESC LIMIT 1",
         (user_id,),
     )
     row = cur.fetchone()
