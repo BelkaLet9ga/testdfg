@@ -419,11 +419,7 @@ class TelegramBot:
         if toggle_password:
             password_visible = not password_visible
         self._password_visible[chat_id] = password_visible
-        password_display = (
-            mailbox["password"]
-            if password_visible
-            else "✱" * max(6, len(mailbox["password"]))
-        )
+        password_display = mailbox["password"] if password_visible else "✱✱✱✱"
 
         text = (
             f"📫 {escape(address)}\n"
@@ -452,7 +448,7 @@ class TelegramBot:
         current_page = inbox_state["page"]
 
         keyboard: list[list[InlineKeyboardButton]] = []
-        inbox_icon = "▼" if inbox_open else "⌵"
+        inbox_icon = "⌵" if inbox_open else "⌵"
         keyboard.append(
             [InlineKeyboardButton(f"📧 Входящие {inbox_icon}", callback_data="toggle_inbox")]
         )
@@ -506,7 +502,7 @@ class TelegramBot:
             tools_open = not tools_open
         self._tools_state[chat_id] = tools_open
 
-        icon = "▼" if tools_open else "⌵"
+        icon = "⌵" if tools_open else "⌵"
         keyboard.append([InlineKeyboardButton(f"🧰 Инструменты {icon}", callback_data="toggle_tools")])
         if tools_open:
             label = "Пароль: не видно" if password_visible else "Пароль: видно"
