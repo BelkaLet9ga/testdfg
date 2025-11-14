@@ -143,6 +143,7 @@ class TelegramBot:
         self.application.add_handler(CallbackQueryHandler(self.on_callback))
         self._polling_task: Optional[asyncio.Task] = None
         self._tools_state: dict[int, bool] = {}
+        self._password_visible: dict[int, bool] = {}
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -254,6 +255,13 @@ class TelegramBot:
             await query.answer()
             return
 
+        if data == "toggle_pwd":
+            await self._send_dashboard(
+                chat_id, query.from_user, message_id, toggle_password=True
+            )
+            await query.answer()
+            return
+
         if data == "refresh":
             await self._send_dashboard(chat_id, query.from_user, message_id)
             await query.answer("Список обновлён")
@@ -321,6 +329,7 @@ class TelegramBot:
         telegram_user,
         message_id: Optional[int] = None,
         toggle_tools: bool = False,
+        toggle_password: bool = False,
     ) -> None:
         user_record = ensure_user(telegram_user.id, telegram_user.full_name)
         mailbox = ensure_mailbox_record(user_record["id"])
@@ -329,12 +338,21 @@ class TelegramBot:
         total = count_messages(mailbox["id"])
         letters = list_messages(mailbox["id"], limit=MESSAGE_LIMIT)
 
+        password_visible = self._password_visible.get(chat_id, False)
+        if toggle_password:
+            password_visible = not password_visible
+        self._password_visible[chat_id] = password_visible
+        password_display = (
+            mailbox["password"]
+            if password_visible
+            else "✱" * max(6, len(mailbox["password"]))
+        )
+
         text = (
-            "<b>Главное меню</b>\n\n"
-            f"<b>📧 {escape(address)}</b>\n"
-            f"<b>Пароль:</b> {escape(mailbox['password'])}\n"
-            f"<b>Количество писем: {total}</b>\n"
-            f"<b>Дата создания: {escape(created_at)}</b>"
+            f"📫 {escape(address)}\n"
+            f"  └ <b>Пароль:</b> <code>{escape(password_display)}</code>\n\n"
+            f"<b>┌ Количество писем:</b> <code>{total}</code>\n"
+            f"<b>└ Дата создания:</b> <code>{escape(created_at)}</code>"
         )
 
         keyboard: list[list[InlineKeyboardButton]] = []
@@ -354,9 +372,11 @@ class TelegramBot:
             tools_open = not tools_open
         self._tools_state[chat_id] = tools_open
 
-        icon = "⌵" if tools_open else "⌵"
+        icon = "▼" if tools_open else "⌵"
         keyboard.append([InlineKeyboardButton(f"🧰 Инструменты {icon}", callback_data="toggle_tools")])
         if tools_open:
+            label = "Пароль: не видно" if password_visible else "Пароль: видно"
+            keyboard.append([InlineKeyboardButton(label, callback_data="toggle_pwd")])
             keyboard.append([InlineKeyboardButton("↻ Обновить", callback_data="refresh")])
             keyboard.append([InlineKeyboardButton("✏️ Изменить почту", callback_data="change")])
         markup = InlineKeyboardMarkup(keyboard)
