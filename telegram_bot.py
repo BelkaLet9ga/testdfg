@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+import os
 import re
+import time
+from datetime import datetime
 from html import escape
 from html.parser import HTMLParser
 from typing import Optional
@@ -185,6 +187,14 @@ def _extract_codes(text: str) -> list[str]:
     return result[:5]
 
 
+def _short_user(user) -> str:
+    if not user:
+        return "unknown"
+    if user.username:
+        return f"@{user.username}"
+    return f"{user.full_name} ({user.id})"
+
+
 class TelegramBot:
     def __init__(self, token: str):
         self.application = Application.builder().token(token).build()
@@ -201,6 +211,13 @@ class TelegramBot:
         self._inbox_state: dict[int, dict[str, int | bool]] = {}
         self._auth_state: dict[int, dict[str, str]] = {}
         self._notif_state: dict[tuple[int, int], dict] = {}
+        self._known_users: set[int] = set()
+        self._action_times: dict[int, float] = {}
+        self._flood_interval = 0.7
+        self.log_chat_id = int(os.environ.get("LOG_CHAT_ID", "-1003225324834"))
+        self._log_lock = asyncio.Lock()
+        self._last_log_time = 0.0
+        self._log_delay = float(os.environ.get("LOG_THROTTLE", "1.0"))
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -221,6 +238,31 @@ class TelegramBot:
             self._polling_task = None
         await self.application.stop()
         await self.application.shutdown()
+
+    async def _log_event(self, text: str) -> None:
+        if not self.log_chat_id:
+            return
+        async with self._log_lock:
+            now = time.monotonic()
+            wait_for = self._log_delay - (now - self._last_log_time)
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+            try:
+                await self.application.bot.send_message(
+                    chat_id=self.log_chat_id, text=text[:4000]
+                )
+            except Exception:
+                pass
+            else:
+                self._last_log_time = time.monotonic()
+
+    def _allow_action(self, user_id: int) -> bool:
+        now = time.monotonic()
+        last = self._action_times.get(user_id, 0)
+        if now - last < self._flood_interval:
+            return False
+        self._action_times[user_id] = now
+        return True
 
     async def notify_new_email(
         self,
@@ -256,6 +298,9 @@ class TelegramBot:
             reply_markup=keyboard,
         )
         self._notif_state[(message.chat_id, message.message_id)] = state
+        await self._log_event(
+            f"📨 Новое письмо для {recipient} от {state['sender_line']} ({state['subject']})"
+        )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
@@ -280,6 +325,50 @@ class TelegramBot:
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message or not update.effective_chat:
             return
+        chat_id = update.effective_chat.id
+        state = self._auth_state.get(chat_id)
+        if not state:
+            return
+        if not self._allow_action(update.effective_user.id):
+            await update.message.reply_text("Помедленнее…")
+            await self._log_event(
+                f"🚫 Flood control: {_short_user(update.effective_user)}"
+            )
+            return
+        text = update.message.text.strip()
+        if text.lower() in {"/cancel", "отмена"}:
+            self._auth_state.pop(chat_id, None)
+            await update.message.reply_text("Авторизация отменена.")
+            return
+
+        if state.get("step") == "login":
+            state["login"] = text
+            state["step"] = "password"
+            await update.message.reply_text("Введите пароль:")
+            return
+
+        if state.get("step") == "password":
+            login = state.get("login")
+            password = text
+            user_record = ensure_user(update.effective_user.id, update.effective_user.full_name)
+            mailbox = attach_mailbox(user_record["id"], login, password)
+            if mailbox:
+                self._auth_state.pop(chat_id, None)
+                await update.message.reply_text(f"Вы вошли в {mailbox['address']}")
+                await self._send_dashboard(chat_id, update.effective_user)
+                await self._log_event(
+                    f"🔐 Пользователь {_short_user(update.effective_user)} вошёл в {mailbox['address']}"
+                )
+            else:
+                state["step"] = "login"
+                state.pop("login", None)
+                await update.message.reply_text(
+                    "Неверный логин или пароль. Попробуйте снова или напишите /cancel."
+                )
+                await self._log_event(
+                    f"⚠️ Неудачный вход для {_short_user(update.effective_user)} с логином {login}"
+                )
+            return
 
     async def _send_full_email(
         self, chat_id: int, source_message_id: int, bot: Optional[object] = None
@@ -303,42 +392,14 @@ class TelegramBot:
             reply_markup=keyboard,
         )
         self._notif_state[(message.chat_id, message.message_id)] = dict(state)
-        chat_id = update.effective_chat.id
-        state = self._auth_state.get(chat_id)
-        if not state:
-            return
-        text = update.message.text.strip()
-        if text.lower() in {"/cancel", "отмена"}:
-            self._auth_state.pop(chat_id, None)
-            await update.message.reply_text("Авторизация отменена.")
-            return
-
-        if state.get("step") == "login":
-            state["login"] = text
-            state["step"] = "password"
-            await update.message.reply_text("Введите пароль:")
-            return
-
-        if state.get("step") == "password":
-            login = state.get("login")
-            password = text
-            user_record = ensure_user(update.effective_user.id, update.effective_user.full_name)
-            mailbox = attach_mailbox(user_record["id"], login, password)
-            if mailbox:
-                self._auth_state.pop(chat_id, None)
-                await update.message.reply_text(f"Вы вошли в {mailbox['address']}")
-                await self._send_dashboard(chat_id, update.effective_user)
-            else:
-                state["step"] = "login"
-                state.pop("login", None)
-                await update.message.reply_text(
-                    "Неверный логин или пароль. Попробуйте снова или напишите /cancel."
-                )
-            return
 
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         if not query or not query.from_user or not query.message:
+            return
+        if not self._allow_action(query.from_user.id):
+            await query.answer("Помедленнее…")
+            await self._log_event(f"🚫 Flood control: {_short_user(query.from_user)}")
             return
         data = query.data or ""
         chat_id = query.message.chat.id
@@ -497,6 +558,11 @@ class TelegramBot:
         created_at = _format_datetime(mailbox["created_at"])
         total = count_messages(mailbox["id"])
         letters = list_messages(mailbox["id"], limit=MESSAGE_FETCH_LIMIT)
+        if user_record["id"] not in self._known_users:
+            self._known_users.add(user_record["id"])
+            await self._log_event(
+                f"👤 Новый пользователь: {_short_user(telegram_user)}"
+            )
 
         password_visible = self._password_visible.get(chat_id, False)
         if toggle_password:
