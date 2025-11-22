@@ -281,7 +281,9 @@ class TelegramBot:
         if not update.effective_user or not update.message or not update.effective_chat:
             return
 
-    async def _send_full_email(self, chat_id: int, source_message_id: int) -> None:
+    async def _send_full_email(
+        self, chat_id: int, source_message_id: int, bot: Optional[object] = None
+    ) -> None:
         state = self._notif_state.get((chat_id, source_message_id))
         if not state:
             await self.application.bot.send_message(
@@ -293,7 +295,8 @@ class TelegramBot:
                 state, include_open_button=False, include_code_button=False
             )
         )
-        message = await self.application.bot.send_message(
+        target_bot = bot or self.application.bot
+        message = await target_bot.send_message(
             chat_id=chat_id,
             text=_build_full_email_text(state),
             parse_mode="HTML",
@@ -395,10 +398,8 @@ class TelegramBot:
                 await query.answer("Код не найден")
                 return
             state["code_visible"] = not state["code_visible"]
-            await self.application.bot.edit_message_text(
+            await query.edit_message_text(
                 text=_build_notification_text(state),
-                chat_id=chat_id,
-                message_id=message_id,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(_build_notification_keyboard(state)),
             )
@@ -411,10 +412,8 @@ class TelegramBot:
                 await query.answer("Ссылок нет")
                 return
             state["links_open"] = not state["links_open"]
-            await self.application.bot.edit_message_text(
+            await query.edit_message_text(
                 text=_build_notification_text(state),
-                chat_id=chat_id,
-                message_id=message_id,
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(_build_notification_keyboard(state)),
             )
@@ -422,7 +421,7 @@ class TelegramBot:
             return
 
         if data == "notif_open":
-            await self._send_full_email(chat_id, message_id)
+            await self._send_full_email(chat_id, message_id, context.bot)
             await query.answer()
             return
 
