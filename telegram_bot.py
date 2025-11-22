@@ -275,6 +275,7 @@ class TelegramBot:
         owner = get_user_for_address(recipient)
         if not owner or not owner.get("telegram_id"):
             return
+        owner_name = owner.get("name") or owner.get("telegram_id")
         normalized_text = _normalize_body(body_plain or "", body_html or "")
         links = _extract_links(body_html or "")[:3]
         codes = _extract_codes(normalized_text)
@@ -299,7 +300,7 @@ class TelegramBot:
         )
         self._notif_state[(message.chat_id, message.message_id)] = state
         await self._log_event(
-            f"📨 Новое письмо для {recipient} от {state['sender_line']} ({state['subject']})"
+            f"📨 Новое письмо для {recipient} (user: {owner_name}) от {state['sender_line']} ({state['subject']})"
         )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

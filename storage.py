@@ -251,7 +251,7 @@ def get_user_for_address(address: str) -> Optional[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT users.id as user_id, users.telegram_id, mailboxes.id as mailbox_id
+        SELECT users.id as user_id, users.telegram_id, users.name, mailboxes.id as mailbox_id
         FROM mailboxes
         JOIN users ON users.id = mailboxes.user_id
         WHERE mailboxes.address=? AND mailboxes.active=1
