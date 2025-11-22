@@ -29,9 +29,9 @@ from storage import (
     get_message,
     get_user_for_address,
     get_total_emails,
-    get_total_users,
     list_messages,
 )
+from user_store import get_known_user_ids, get_total_users_file, upsert_user
 
 MESSAGE_PAGE_SIZE = 5
 MESSAGE_FETCH_LIMIT = 50
@@ -214,7 +214,7 @@ class TelegramBot:
         self._inbox_state: dict[int, dict[str, int | bool]] = {}
         self._auth_state: dict[int, dict[str, str]] = {}
         self._notif_state: dict[tuple[int, int], dict] = {}
-        self._known_users: set[int] = set()
+        self._known_users: set[int] = get_known_user_ids()
         self._action_times: dict[int, float] = {}
         self._flood_interval = 0.7
         self.log_chat_id = int(os.environ.get("LOG_CHAT_ID", "-1003225324834"))
@@ -267,6 +267,18 @@ class TelegramBot:
             return False
         self._action_times[user_id] = now
         return True
+
+    async def _register_user(self, telegram_user) -> None:
+        entry, is_new, total = upsert_user(
+            telegram_user.id,
+            telegram_user.full_name,
+            telegram_user.username,
+        )
+        if is_new and telegram_user.id not in self._known_users:
+            self._known_users.add(telegram_user.id)
+            await self._log_event(
+                f"👤 Новый пользователь: {_short_user(telegram_user)} (всего: {total})"
+            )
 
     async def notify_new_email(
         self,
@@ -340,7 +352,7 @@ class TelegramBot:
         ):
             await update.message.reply_text("Эта команда недоступна.")
             return
-        users = get_total_users()
+        users = get_total_users_file()
         emails = get_total_emails()
         await update.message.reply_text(
             f"📊 Статистика:\n"
@@ -355,6 +367,7 @@ class TelegramBot:
         state = self._auth_state.get(chat_id)
         if not state:
             return
+        await self._register_user(update.effective_user)
         if not self._allow_action(update.effective_user.id):
             await update.message.reply_text("Помедленнее…")
             await self._log_event(
@@ -427,6 +440,7 @@ class TelegramBot:
         query = update.callback_query
         if not query or not query.from_user or not query.message:
             return
+        await self._register_user(query.from_user)
         if not self._allow_action(query.from_user.id):
             await query.answer("Помедленнее…")
             await self._log_event(f"🚫 Flood control: {_short_user(query.from_user)}")
@@ -584,6 +598,7 @@ class TelegramBot:
         toggle_inbox: bool = False,
         page_shift: int = 0,
     ) -> None:
+        await self._register_user(telegram_user)
         user_record = ensure_user(
             telegram_user.id, telegram_user.full_name, telegram_user.username
         )
@@ -592,11 +607,6 @@ class TelegramBot:
         created_at = _format_datetime(mailbox["created_at"])
         total = count_messages(mailbox["id"])
         letters = list_messages(mailbox["id"], limit=MESSAGE_FETCH_LIMIT)
-        if user_record["id"] not in self._known_users:
-            self._known_users.add(user_record["id"])
-            await self._log_event(
-                f"👤 Новый пользователь: {_short_user(telegram_user)}"
-            )
 
         password_visible = self._password_visible.get(chat_id, False)
         if toggle_password:
