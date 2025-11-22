@@ -374,3 +374,21 @@ def get_message(message_id: int) -> Optional[dict]:
     data["sender"] = data.get("sender_name") or data.get("sender_email")
     data["body"] = data.get("body_plain")
     return data
+
+
+def get_total_users() -> int:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(1) FROM users")
+    row = cur.fetchone()
+    conn.close()
+    return int(row[0]) if row else 0
+
+
+def get_total_emails() -> int:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(1) FROM emails")
+    row = cur.fetchone()
+    conn.close()
+    return int(row[0]) if row else 0

@@ -28,6 +28,8 @@ from storage import (
     ensure_user,
     get_message,
     get_user_for_address,
+    get_total_emails,
+    get_total_users,
     list_messages,
 )
 
@@ -201,6 +203,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("inbox", self.cmd_inbox))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
+        self.application.add_handler(CommandHandler("stats", self.cmd_stats))
         self.application.add_handler(CallbackQueryHandler(self.on_callback))
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
@@ -218,6 +221,7 @@ class TelegramBot:
         self._log_lock = asyncio.Lock()
         self._last_log_time = 0.0
         self._log_delay = float(os.environ.get("LOG_THROTTLE", "1.0"))
+        self.admin_id = int(os.environ.get("ADMIN_ID", "7942744213"))
 
     async def start(self) -> None:
         await self.application.initialize()
@@ -325,6 +329,23 @@ class TelegramBot:
             "/start — открыть главное меню\n"
             "/inbox — обновить список писем\n"
             "/help — краткая справка"
+        )
+
+    async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_user or not update.message or not update.effective_chat:
+            return
+        if (
+            update.effective_user.id != self.admin_id
+            or update.effective_chat.id != self.log_chat_id
+        ):
+            await update.message.reply_text("Эта команда недоступна.")
+            return
+        users = get_total_users()
+        emails = get_total_emails()
+        await update.message.reply_text(
+            f"📊 Статистика:\n"
+            f"• Пользователей: {users}\n"
+            f"• Получено писем: {emails}"
         )
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
