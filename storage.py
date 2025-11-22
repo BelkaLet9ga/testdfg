@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 DB_PATH = Path(__file__).parent / "tempmail.db"
-DOMAIN = "1398hnjfkdskd.de"
+DOMAIN = "tgramail.com"
 
 FIRST_NAMES = [
     "alex", "max", "oliver", "daniel", "chris", "peter", "john", "michael", "david", "nick",
