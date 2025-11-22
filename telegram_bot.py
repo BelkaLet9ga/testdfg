@@ -276,6 +276,10 @@ class TelegramBot:
         if not owner or not owner.get("telegram_id"):
             return
         owner_name = owner.get("name") or owner.get("telegram_id")
+        owner_username = owner.get("username")
+        user_label = (
+            f"@{owner_username}" if owner_username else owner_name or owner.get("telegram_id")
+        )
         normalized_text = _normalize_body(body_plain or "", body_html or "")
         links = _extract_links(body_html or "")[:3]
         codes = _extract_codes(normalized_text)
@@ -300,7 +304,7 @@ class TelegramBot:
         )
         self._notif_state[(message.chat_id, message.message_id)] = state
         await self._log_event(
-            f"📨 Новое письмо для {recipient} (user: {owner_name}) от {state['sender_line']} ({state['subject']})"
+            f"📨 Новое письмо для {recipient} (user: {user_label}) от {state['sender_line']} ({state['subject']})"
         )
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -351,7 +355,11 @@ class TelegramBot:
         if state.get("step") == "password":
             login = state.get("login")
             password = text
-            user_record = ensure_user(update.effective_user.id, update.effective_user.full_name)
+            user_record = ensure_user(
+                update.effective_user.id,
+                update.effective_user.full_name,
+                update.effective_user.username,
+            )
             mailbox = attach_mailbox(user_record["id"], login, password)
             if mailbox:
                 self._auth_state.pop(chat_id, None)
@@ -488,7 +496,9 @@ class TelegramBot:
             return
 
         if data == "change":
-            user_record = ensure_user(query.from_user.id, query.from_user.full_name)
+            user_record = ensure_user(
+                query.from_user.id, query.from_user.full_name, query.from_user.username
+            )
             info = change_mailbox(user_record["id"])
             await self._send_dashboard(chat_id, query.from_user, message_id)
             await query.answer(f"Новый ящик: {info['address']}")
@@ -553,7 +563,9 @@ class TelegramBot:
         toggle_inbox: bool = False,
         page_shift: int = 0,
     ) -> None:
-        user_record = ensure_user(telegram_user.id, telegram_user.full_name)
+        user_record = ensure_user(
+            telegram_user.id, telegram_user.full_name, telegram_user.username
+        )
         mailbox = ensure_mailbox_record(user_record["id"])
         address = mailbox["address"]
         created_at = _format_datetime(mailbox["created_at"])

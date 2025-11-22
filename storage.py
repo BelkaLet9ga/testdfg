@@ -43,6 +43,7 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             telegram_id TEXT NOT NULL UNIQUE,
             name TEXT,
+            username TEXT,
             created_at TEXT NOT NULL
         )
         """
@@ -77,6 +78,7 @@ def init_db() -> None:
         )
         """
     )
+    _ensure_user_columns(cur)
     conn.commit()
     conn.close()
 
@@ -98,15 +100,36 @@ def _maybe_reset_legacy(cur: sqlite3.Cursor) -> None:
         cur.execute("DROP TABLE IF EXISTS users")
 
 
-def ensure_user(telegram_id: int, name: Optional[str] = None) -> dict:
+def _ensure_user_columns(cur: sqlite3.Cursor) -> None:
+    try:
+        cur.execute("PRAGMA table_info(users)")
+    except sqlite3.OperationalError:
+        return
+    columns = {row[1] for row in cur.fetchall()}
+    if "username" not in columns:
+        cur.execute("ALTER TABLE users ADD COLUMN username TEXT")
+
+
+def ensure_user(
+    telegram_id: int, name: Optional[str] = None, username: Optional[str] = None
+) -> dict:
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE telegram_id=?", (str(telegram_id),))
     row = cur.fetchone()
     if row:
+        updates = []
+        params = []
         if name and row["name"] != name:
+            updates.append("name=?")
+            params.append(name)
+        if username and row["username"] != username:
+            updates.append("username=?")
+            params.append(username)
+        if updates:
             cur.execute(
-                "UPDATE users SET name=? WHERE id=?", (name, row["id"])
+                f"UPDATE users SET {', '.join(updates)} WHERE id=?",
+                (*params, row["id"]),
             )
             conn.commit()
         conn.close()
@@ -114,8 +137,8 @@ def ensure_user(telegram_id: int, name: Optional[str] = None) -> dict:
 
     now = datetime.utcnow().isoformat()
     cur.execute(
-        "INSERT INTO users (telegram_id, name, created_at) VALUES (?, ?, ?)",
-        (str(telegram_id), name, now),
+        "INSERT INTO users (telegram_id, name, username, created_at) VALUES (?, ?, ?, ?)",
+        (str(telegram_id), name, username, now),
     )
     conn.commit()
     cur.execute("SELECT * FROM users WHERE telegram_id=?", (str(telegram_id),))
@@ -251,7 +274,7 @@ def get_user_for_address(address: str) -> Optional[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT users.id as user_id, users.telegram_id, users.name, mailboxes.id as mailbox_id
+        SELECT users.id as user_id, users.telegram_id, users.name, users.username, mailboxes.id as mailbox_id
         FROM mailboxes
         JOIN users ON users.id = mailboxes.user_id
         WHERE mailboxes.address=? AND mailboxes.active=1
