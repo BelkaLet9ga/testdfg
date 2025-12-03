@@ -203,9 +203,16 @@ def _short_user(user) -> str:
 
 def _parse_telegram_ids(raw: str) -> set[int]:
     ids: set[int] = set()
-    for token in raw.replace(",", " ").split():
+    normalized = raw.replace("\u00A0", " ").replace("\u202F", " ")
+    lines = normalized.splitlines()
+    if not lines:
+        lines = [normalized]
+    for line in lines:
+        cleaned = re.sub(r"[^\d]", "", line)
+        if not cleaned:
+            continue
         try:
-            ids.add(int(token))
+            ids.add(int(cleaned))
         except ValueError:
             continue
     return ids
@@ -324,7 +331,7 @@ class TelegramBot:
             telegram_user.full_name,
             telegram_user.username,
         )
-        if is_new and telegram_user.id not in self._known_users:
+        if telegram_user.id not in self._known_users:
             self._known_users.add(telegram_user.id)
             await self._log_event(
                 f"👤 Новый пользователь: {_short_user(telegram_user)} (всего: {total})"
@@ -938,7 +945,7 @@ class TelegramBot:
         icon = "⌵" if tools_open else "⌵"
         keyboard.append([InlineKeyboardButton(f"🧰 Инструменты {icon}", callback_data="toggle_tools")])
         if tools_open:
-            label = "Пароль: не видно" if password_visible else "Пароль: видно"
+            label = "Пароль: видно" if password_visible else "Пароль: не видно"
             keyboard.append([InlineKeyboardButton(label, callback_data="toggle_pwd")])
             keyboard.append([InlineKeyboardButton("👤 Войти в почту", callback_data="auth_start")])
             keyboard.append([InlineKeyboardButton("↻ Обновить", callback_data="refresh")])
