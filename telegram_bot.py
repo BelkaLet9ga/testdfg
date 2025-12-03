@@ -201,6 +201,16 @@ def _short_user(user) -> str:
     return f"{user.full_name} ({user.id})"
 
 
+def _parse_telegram_ids(raw: str) -> set[int]:
+    ids: set[int] = set()
+    for token in raw.replace(",", " ").split():
+        try:
+            ids.add(int(token))
+        except ValueError:
+            continue
+    return ids
+
+
 def _admin_panel_text() -> str:
     domain = get_domain()
     total_users = get_total_users()
@@ -216,6 +226,7 @@ def _admin_panel_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("Сменить домен", callback_data="admin_change_domain")],
             [InlineKeyboardButton("Отправить сообщение", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("Добавить юзеров", callback_data="admin_add_users")],
         ]
     )
 
@@ -517,6 +528,29 @@ class TelegramBot:
             )
             return
 
+        if mode == "add_users":
+            ids = _parse_telegram_ids(text)
+            if not ids:
+                await update.message.reply_text("Не нашёл ни одного ID. Введите ID, каждый с новой строки.")
+                return
+            existing = set(list_telegram_ids())
+            new_count = 0
+            for tid in ids:
+                if tid not in existing:
+                    new_count += 1
+                ensure_user(tid, name=None, username=None)
+                upsert_user(tid, name=None, username=None)
+            self._admin_state.pop(chat_id, None)
+            total_users = get_total_users()
+            await update.message.reply_text(
+                f"Готово. Новых: {new_count}, всего обработано: {len(ids)}, сейчас пользователей: {total_users}",
+                reply_markup=_admin_panel_keyboard(),
+            )
+            await self._log_event(
+                f"👥 Админ {_short_user(update.effective_user)} добавил пользователей: новых {new_count}, всего {len(ids)}"
+            )
+            return
+
         await update.message.reply_text("Неизвестное действие.")
 
     async def _send_full_email(
@@ -607,6 +641,18 @@ class TelegramBot:
             await self.application.bot.send_message(
                 chat_id=chat_id,
                 text="Введите текст рассылки:",
+            )
+            return
+
+        if data == "admin_add_users":
+            if not is_admin:
+                await query.answer("Недоступно", show_alert=True)
+                return
+            self._admin_state[chat_id] = {"mode": "add_users", "step": "text"}
+            await query.answer()
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text="Вставьте список Telegram ID (каждый с новой строки или через пробел):",
             )
             return
 
