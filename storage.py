@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 DB_PATH = Path(__file__).parent / "tempmail.db"
-DOMAIN = "tgramail.com"
+DEFAULT_DOMAIN = "tgramail.com"
 
 FIRST_NAMES = [
     "alex", "max", "oliver", "daniel", "chris", "peter", "john", "michael", "david", "nick",
@@ -36,6 +36,7 @@ def init_db() -> None:
     conn = get_db()
     cur = conn.cursor()
     _maybe_reset_legacy(cur)
+    _ensure_settings(cur)
 
     cur.execute(
         """
@@ -110,6 +111,54 @@ def _ensure_user_columns(cur: sqlite3.Cursor) -> None:
         cur.execute("ALTER TABLE users ADD COLUMN username TEXT")
 
 
+def _ensure_settings(cur: sqlite3.Cursor) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute("SELECT value FROM settings WHERE key='domain'")
+    row = cur.fetchone()
+    if not row:
+        cur.execute(
+            "INSERT INTO settings (key, value) VALUES ('domain', ?)",
+            (DEFAULT_DOMAIN,),
+        )
+
+
+def get_domain() -> str:
+    conn = get_db()
+    cur = conn.cursor()
+    _ensure_settings(cur)
+    conn.commit()
+    cur.execute("SELECT value FROM settings WHERE key='domain'")
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else DEFAULT_DOMAIN
+
+
+def set_domain(domain: str) -> str:
+    value = (domain or DEFAULT_DOMAIN).strip().lower()
+    conn = get_db()
+    cur = conn.cursor()
+    _ensure_settings(cur)
+    cur.execute(
+        "UPDATE settings SET value=? WHERE key='domain'",
+        (value,),
+    )
+    if cur.rowcount == 0:
+        cur.execute(
+            "INSERT INTO settings (key, value) VALUES ('domain', ?)",
+            (value,),
+        )
+    conn.commit()
+    conn.close()
+    return value
+
+
 def ensure_user(
     telegram_id: int, name: Optional[str] = None, username: Optional[str] = None
 ) -> dict:
@@ -166,7 +215,7 @@ def _generate_address() -> str:
     last = random.choice(LAST_NAMES)
     digits = "".join(random.choice(string.digits) for _ in range(random.randint(2, 4)))
     local = f"{first}.{last}{digits}"
-    return f"{local}@{DOMAIN}".lower()
+    return f"{local}@{get_domain()}".lower()
 
 
 def ensure_mailbox_record(user_id: int) -> dict:
@@ -392,3 +441,17 @@ def get_total_emails() -> int:
     row = cur.fetchone()
     conn.close()
     return int(row[0]) if row else 0
+
+
+def list_telegram_ids() -> list[int]:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT telegram_id FROM users")
+    ids = []
+    for row in cur.fetchall():
+        try:
+            ids.append(int(row[0]))
+        except (TypeError, ValueError):
+            continue
+    conn.close()
+    return ids

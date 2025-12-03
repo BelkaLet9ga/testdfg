@@ -18,7 +18,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from telegram.error import BadRequest
+from telegram.error import BadRequest, Forbidden, RetryAfter, TimedOut
 
 from storage import (
     attach_mailbox,
@@ -26,12 +26,16 @@ from storage import (
     count_messages,
     ensure_mailbox_record,
     ensure_user,
+    get_domain,
     get_message,
     get_user_for_address,
+    get_total_users,
     get_total_emails,
+    list_telegram_ids,
+    set_domain,
     list_messages,
 )
-from user_store import get_known_user_ids, get_total_users_file, upsert_user
+from user_store import get_known_user_ids, upsert_user
 
 MESSAGE_PAGE_SIZE = 5
 MESSAGE_FETCH_LIMIT = 50
@@ -197,6 +201,36 @@ def _short_user(user) -> str:
     return f"{user.full_name} ({user.id})"
 
 
+def _admin_panel_text() -> str:
+    domain = get_domain()
+    total_users = get_total_users()
+    return (
+        "🛠 Админ-панель\n"
+        f"Активный домен: <code>{escape(domain)}</code>\n"
+        f"Пользователей: <b>{total_users}</b>"
+    )
+
+
+def _admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Сменить домен", callback_data="admin_change_domain")],
+            [InlineKeyboardButton("Отправить сообщение", callback_data="admin_broadcast")],
+        ]
+    )
+
+
+def _broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Отправить", callback_data="admin_broadcast_confirm"),
+                InlineKeyboardButton("✖️ Отмена", callback_data="admin_broadcast_cancel"),
+            ]
+        ]
+    )
+
+
 class TelegramBot:
     def __init__(self, token: str):
         self.application = Application.builder().token(token).build()
@@ -204,6 +238,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("inbox", self.cmd_inbox))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CommandHandler("stats", self.cmd_stats))
+        self.application.add_handler(CommandHandler("admin", self.cmd_admin))
         self.application.add_handler(CallbackQueryHandler(self.on_callback))
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text)
@@ -214,6 +249,7 @@ class TelegramBot:
         self._inbox_state: dict[int, dict[str, int | bool]] = {}
         self._auth_state: dict[int, dict[str, str]] = {}
         self._notif_state: dict[tuple[int, int], dict] = {}
+        self._admin_state: dict[int, dict[str, str]] = {}
         self._known_users: set[int] = get_known_user_ids()
         self._action_times: dict[int, float] = {}
         self._flood_interval = 0.7
@@ -267,6 +303,9 @@ class TelegramBot:
             return False
         self._action_times[user_id] = now
         return True
+
+    def _is_admin(self, user) -> bool:
+        return bool(user and user.id == self.admin_id)
 
     async def _register_user(self, telegram_user) -> None:
         entry, is_new, total = upsert_user(
@@ -352,7 +391,7 @@ class TelegramBot:
         ):
             await update.message.reply_text("Эта команда недоступна.")
             return
-        users = get_total_users_file()
+        users = get_total_users()
         emails = get_total_emails()
         await update.message.reply_text(
             f"📊 Статистика:\n"
@@ -360,12 +399,25 @@ class TelegramBot:
             f"• Получено писем: {emails}"
         )
 
+    async def cmd_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_user or not update.message:
+            return
+        if not self._is_admin(update.effective_user):
+            await update.message.reply_text("Эта команда недоступна.")
+            return
+        await update.message.reply_text(
+            _admin_panel_text(),
+            parse_mode="HTML",
+            reply_markup=_admin_panel_keyboard(),
+        )
+
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message or not update.effective_chat:
             return
         chat_id = update.effective_chat.id
+        admin_state = self._admin_state.get(chat_id)
         state = self._auth_state.get(chat_id)
-        if not state:
+        if not admin_state and not state:
             return
         await self._register_user(update.effective_user)
         if not self._allow_action(update.effective_user.id):
@@ -376,8 +428,22 @@ class TelegramBot:
             return
         text = update.message.text.strip()
         if text.lower() in {"/cancel", "отмена"}:
-            self._auth_state.pop(chat_id, None)
-            await update.message.reply_text("Авторизация отменена.")
+            if admin_state:
+                self._admin_state.pop(chat_id, None)
+            if state:
+                self._auth_state.pop(chat_id, None)
+            await update.message.reply_text("Действие отменено.")
+            return
+
+        if admin_state:
+            if not self._is_admin(update.effective_user):
+                self._admin_state.pop(chat_id, None)
+                await update.message.reply_text("Эта команда недоступна.")
+                return
+            await self._handle_admin_text(update, admin_state, text)
+            return
+
+        if not state:
             return
 
         if state.get("step") == "login":
@@ -413,6 +479,46 @@ class TelegramBot:
                 )
             return
 
+    async def _handle_admin_text(self, update: Update, admin_state: dict, text: str) -> None:
+        chat_id = update.effective_chat.id
+        mode = admin_state.get("mode")
+
+        if mode == "domain":
+            new_domain = text.strip().lower()
+            if (
+                not new_domain
+                or " " in new_domain
+                or "@" in new_domain
+                or "." not in new_domain
+                or not re.match(r"^[a-zA-Z0-9.-]+$", new_domain)
+            ):
+                await update.message.reply_text(
+                    "Введите домен без @ и пробелов, например example.com"
+                )
+                return
+            normalized = set_domain(new_domain)
+            self._admin_state.pop(chat_id, None)
+            await update.message.reply_text(
+                f"✅ Домен обновлён: <code>{escape(normalized)}</code>\n\n{_admin_panel_text()}",
+                parse_mode="HTML",
+                reply_markup=_admin_panel_keyboard(),
+            )
+            await self._log_event(
+                f"🛠 Домен изменён на {normalized} админом {_short_user(update.effective_user)}"
+            )
+            return
+
+        if mode == "broadcast":
+            admin_state["message"] = text
+            admin_state["step"] = "confirm"
+            await update.message.reply_text(
+                f"Рассылка предпросмотр:\n\n{text}",
+                reply_markup=_broadcast_confirm_keyboard(),
+            )
+            return
+
+        await update.message.reply_text("Неизвестное действие.")
+
     async def _send_full_email(
         self, chat_id: int, source_message_id: int, bot: Optional[object] = None
     ) -> None:
@@ -436,6 +542,32 @@ class TelegramBot:
         )
         self._notif_state[(message.chat_id, message.message_id)] = dict(state)
 
+    async def _broadcast_message(self, text: str) -> tuple[int, int, int]:
+        user_ids = set(list_telegram_ids())
+        if self.admin_id:
+            user_ids.add(self.admin_id)
+        sent = 0
+        failed = 0
+        for uid in user_ids:
+            try:
+                await self.application.bot.send_message(chat_id=uid, text=text)
+                sent += 1
+            except RetryAfter as exc:
+                await asyncio.sleep(exc.retry_after + 0.5)
+                try:
+                    await self.application.bot.send_message(chat_id=uid, text=text)
+                    sent += 1
+                except Exception:
+                    failed += 1
+            except Forbidden:
+                failed += 1
+            except (TimedOut, BadRequest):
+                failed += 1
+            except Exception:
+                failed += 1
+            await asyncio.sleep(0.05)
+        return sent, len(user_ids), failed
+
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         if not query or not query.from_user or not query.message:
@@ -448,9 +580,66 @@ class TelegramBot:
         data = query.data or ""
         chat_id = query.message.chat.id
         message_id = query.message.message_id
+        is_admin = self._is_admin(query.from_user)
 
         if data == "noop":
             await query.answer("Писем пока нет")
+            return
+
+        if data == "admin_change_domain":
+            if not is_admin:
+                await query.answer("Недоступно", show_alert=True)
+                return
+            self._admin_state[chat_id] = {"mode": "domain", "step": "domain"}
+            await query.answer()
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text="Введите новый домен (без @):",
+            )
+            return
+
+        if data == "admin_broadcast":
+            if not is_admin:
+                await query.answer("Недоступно", show_alert=True)
+                return
+            self._admin_state[chat_id] = {"mode": "broadcast", "step": "text"}
+            await query.answer()
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text="Введите текст рассылки:",
+            )
+            return
+
+        if data == "admin_broadcast_cancel":
+            if not is_admin:
+                await query.answer("Недоступно", show_alert=True)
+                return
+            self._admin_state.pop(chat_id, None)
+            await query.answer("Отменено")
+            return
+
+        if data == "admin_broadcast_confirm":
+            if not is_admin:
+                await query.answer("Недоступно", show_alert=True)
+                return
+            state = self._admin_state.get(chat_id)
+            message_text = state.get("message") if state else None
+            if not message_text:
+                await query.answer("Сообщение отсутствует", show_alert=True)
+                return
+            await query.answer("Отправляю…")
+            sent, total, failed = await self._broadcast_message(message_text)
+            self._admin_state.pop(chat_id, None)
+            note = f"Рассылка отправлена: {sent}/{total}"
+            if failed:
+                note += f" (ошибок: {failed})"
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=note,
+            )
+            await self._log_event(
+                f"📢 Рассылка от {_short_user(query.from_user)}: {sent}/{total}, errors: {failed}"
+            )
             return
 
         if data == "toggle_inbox":
@@ -479,6 +668,11 @@ class TelegramBot:
                 chat_id, query.from_user, message_id, toggle_tools=True
             )
             await query.answer()
+            return
+
+        if data == "refresh":
+            await self._send_dashboard(chat_id, query.from_user, message_id)
+            await query.answer("Обновлено")
             return
 
         if data == "toggle_pwd":
